@@ -8,12 +8,13 @@ synthetic, realistic (but not real) patient data and associated health records.
 __version__ = "1.4.1"
 __author__ = "TietAI and PySynthea project contributors"
 
-from synthea.engine.generator import Generator
+from synthea.engine.generator import Generator, GeneratorOptions
 from synthea.world.person import Person
 from synthea.engine.module import Module
 
 __all__ = [
     "Generator",
+    "GeneratorOptions",
     "Person",
     "Module",
 ]

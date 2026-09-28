@@ -32,13 +32,17 @@ class Config:
             'exporter.years_of_history': 10,
             
             # FHIR exporter
-            'exporter.fhir.export': True,
+            'exporter.fhir.export': False,
             'exporter.fhir.bulk_data': False,
-            'exporter.fhir.transaction_bundle': True,
+            'exporter.fhir.transaction_bundle': False,
             'exporter.fhir.use_shr_extensions': False,
-            'exporter.fhir.use_us_core_ig': True,
+            'exporter.fhir.use_us_core_ig': False,
             'exporter.fhir.profile': '',  # us-core | ips | ehds | none
-            
+
+            # InterSystems SDA3 exporter
+            'exporter.sda3.export': True,
+            'exporter.sda3.sending_facility': 'SYNTHEA',
+
             # CSV exporter
             'exporter.csv.export': False,
             'exporter.csv.append_mode': False,

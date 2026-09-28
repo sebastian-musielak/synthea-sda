@@ -58,6 +58,8 @@ from synthea.engine.module import Module
               type=click.Choice(['us-core', 'ips', 'ehds', 'none']),
               default=None,
               help="FHIR export profile (default: the locale pack's)")
+@click.option('--sda3', is_flag=True,
+              help='Also write InterSystems SDA3 XML, one container per patient')
 @click.option('--list-locales', is_flag=True,
               help='List the installed locale packs')
 @click.option('--list-modules', is_flag=True,
@@ -67,7 +69,7 @@ from synthea.engine.module import Module
 @click.argument('location', nargs=-1)
 def main(population, seed, clinician_seed, gender, age, module, config, modules_dir,
          output_dir, reference_date, state, city, threads, log_level, only_dead,
-         keep_patients, overflow, graphviz, locale, export_profile,
+         keep_patients, overflow, graphviz, locale, export_profile, sda3,
          list_locales, list_modules, version, location):
     """
     Synthea Patient Generator
@@ -159,6 +161,9 @@ def main(population, seed, clinician_seed, gender, age, module, config, modules_
 
     if export_profile:
         config_obj.set('exporter.fhir.profile', export_profile)
+
+    if sda3:
+        config_obj.set('exporter.sda3.export', True)
     
     if module:
         # Enable only specified modules

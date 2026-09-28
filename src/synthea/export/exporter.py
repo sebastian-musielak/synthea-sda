@@ -102,6 +102,11 @@ class Exporter:
             self.patient_exporters.append(
                 FHIRExporter(self.config, self.base_dir, self.locale))
 
+        if self.config.get_bool('exporter.sda3.export', False):
+            from synthea.export.sda3 import SDA3Exporter
+            self.patient_exporters.append(
+                SDA3Exporter(self.config, self.base_dir, self.locale))
+
         server_url = str(self.config.get('exporter.fhir.server_url', '') or '').strip()
         if server_url:
             self.patient_exporters.append(
@@ -121,7 +126,8 @@ class Exporter:
             raise NotImplementedError(
                 f"{key} is set, but the {name} exporter is not implemented in "
                 f"this version. Turn it off, or follow {issue}. "
-                f"Available exporters: exporter.fhir.export, exporter.json.export."
+                f"Available exporters: exporter.fhir.export, "
+                f"exporter.sda3.export, exporter.json.export."
             )
 
     def export(self, person: 'Person'):
