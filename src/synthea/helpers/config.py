@@ -41,7 +41,7 @@ class Config:
 
             # InterSystems SDA3 exporter
             'exporter.sda3.export': True,
-            'exporter.sda3.sending_facility': 'SYNTHEA',
+            'exporter.sda3.sending_facility': 'SYNTHEA_Edge1',
 
             # CSV exporter
             'exporter.csv.export': False,

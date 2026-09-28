@@ -375,6 +375,25 @@ total = sum(r['generated'] for r in results)
 print(f"\nTotal patients generated: {total}")
 ```
 
+### InterSystems SDA3 Facility Feeds
+
+`examples/sda3_facility_feeds.py` writes SDA3 containers as one feed per
+HealthShare Edge, `SYNTHEA_Edge1` by default and up to `SYNTHEA_Edge5`. Each
+feed is a directory whose containers all carry that facility as their
+SendingFacility and MRN assigner, with a `manifest.csv` giving the load order.
+
+```bash
+# One feed, SYNTHEA_Edge1
+uv run python examples/sda3_facility_feeds.py
+
+# Three disjoint feeds: each patient registered at one Edge
+uv run python examples/sda3_facility_feeds.py --facilities 3
+
+# Five overlapping feeds: each Edge sends the visits it saw, under its own
+# MRN, so the same patient reaches the Registry from several Edges
+uv run python examples/sda3_facility_feeds.py -f 5 --routing encounter -p 200 -w 8
+```
+
 ## Testing
 
 ### Run All Tests with UV

@@ -54,6 +54,9 @@ _STANDARDS = {
 
 RACE_STANDARD = 'Race & Ethnicity - CDC'
 
+#: The SendingFacility when the configuration names none.
+DEFAULT_FACILITY = 'SYNTHEA_Edge1'
+
 #: SDA3 EncounterType is a closed list of single letters. Everything that is
 #: not an admission or an emergency visit is outpatient; `EncounterCodedType`
 #: carries the precise SNOMED code alongside it.
@@ -200,7 +203,8 @@ def _description(entry) -> Optional[str]:
 class SDA3Exporter(PatientExporter):
     """Write one SDA3 ``<Container>`` XML file per patient."""
 
-    def __init__(self, config: 'Config', base_dir: Path, locale=None):
+    def __init__(self, config: 'Config', base_dir: Path, locale=None,
+                 sending_facility: Optional[str] = None):
         self.config = config
         self.base_dir = base_dir
         self.output_dir = base_dir / 'sda3'
@@ -208,10 +212,14 @@ class SDA3Exporter(PatientExporter):
         self.locale = locale
 
         # The sending facility is part of HealthShare's internal MRN
-        # (facility^assigning organisation^number), so every container in a
-        # run shares it and the MRN's Organization matches it.
+        # (facility^assigning organisation^number), so every container this
+        # exporter writes shares it and the MRN's Organization matches it.
+        # Passing one explicitly lets a caller feed several facilities from
+        # one configuration, one exporter per facility.
         self.sending_facility = str(
-            config.get('exporter.sda3.sending_facility', 'SYNTHEA') or 'SYNTHEA')
+            sending_facility
+            or config.get('exporter.sda3.sending_facility', DEFAULT_FACILITY)
+            or DEFAULT_FACILITY)
         self.pretty = config.get_bool('exporter.pretty_print', True)
 
     def export(self, person: 'Person', time: int) -> Optional[str]:

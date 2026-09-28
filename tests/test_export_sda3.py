@@ -139,6 +139,22 @@ def test_mrn_is_first_and_assigned_by_the_sending_facility(person, tmp_path):
     assert 'SSN' in types
 
 
+def test_default_sending_facility_is_edge1(person, tmp_path):
+    container = SDA3Exporter(_config(), tmp_path).create_container(person)
+    assert container.findtext('SendingFacility') == 'SYNTHEA_Edge1'
+
+
+def test_one_configuration_can_feed_several_facilities(person, tmp_path):
+    """An explicit facility wins over the configured one, MRN included."""
+    config = _config()
+    for facility in ('SYNTHEA_Edge2', 'SYNTHEA_Edge5'):
+        exporter = SDA3Exporter(config, tmp_path, sending_facility=facility)
+        container = exporter.create_container(person)
+        assert container.findtext('SendingFacility') == facility
+        assert container.findtext(
+            'Patient/PatientNumbers/PatientNumber/Organization/Code') == facility
+
+
 def test_patient_demographics(container):
     patient = container.find('Patient')
 
