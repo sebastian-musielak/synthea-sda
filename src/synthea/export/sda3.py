@@ -16,6 +16,7 @@ the point it is made.
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 from datetime import datetime, timedelta, timezone
+import base64
 import xml.etree.ElementTree as ET
 
 from synthea.export.exporter import PatientExporter
@@ -28,7 +29,9 @@ from synthea.export.fhir import (
     _note_uuid,
     _stable_uuid,
 )
+from synthea.export.pdf import text_to_pdf
 from synthea.export.terminology import system_uri, ucum_code
+from synthea.world.notes import NOTE_CODE, NOTE_DISPLAY
 
 if TYPE_CHECKING:
     from synthea.world.person import Person
@@ -193,6 +196,11 @@ def _first(codes: Iterable[Any]) -> Any:
     return None
 
 
+def _note_pdf_uuid(encounter) -> str:
+    """The PDF rendering's DocumentNumber, distinct from the text note's."""
+    return _stable_uuid('note-pdf', encounter.id)
+
+
 def _description(entry) -> Optional[str]:
     code = _first(entry.codes)
     if code is not None and getattr(code, 'display', None):
@@ -221,6 +229,7 @@ class SDA3Exporter(PatientExporter):
             or config.get('exporter.sda3.sending_facility', DEFAULT_FACILITY)
             or DEFAULT_FACILITY)
         self.pretty = config.get_bool('exporter.pretty_print', True)
+        self.pdf_notes = config.get_bool('exporter.sda3.pdf_notes', True)
 
     def export(self, person: 'Person', time: int) -> Optional[str]:
         if not hasattr(person, 'record') or not person.record:
@@ -832,25 +841,46 @@ class SDA3Exporter(PatientExporter):
         self._facility(element, 'EnteringOrganization', self._provider_of(study))
 
     def _documents(self, parent: ET.Element, record) -> None:
-        """Each encounter's clinical note as a Document."""
-        from synthea.world.notes import NOTE_ATTRIBUTE, NOTE_CODE, NOTE_DISPLAY
+        """Each encounter's clinical note as a Document.
+
+        The note is always a TXT Document with the text in NoteText. With
+        ``exporter.sda3.pdf_notes`` on, the same note is also a PDF Document
+        whose Stream holds the rendered file, base64-encoded as SDA3's XML
+        form of a binary stream expects. The two are separate Documents with
+        their own numbers, so a viewer that shows attachments shows the PDF
+        and one that shows text shows the text.
+        """
+        from synthea.world.notes import NOTE_ATTRIBUTE
 
         for encounter in record.encounters:
             text = getattr(encounter, NOTE_ATTRIBUTE, None)
             if not text:
                 continue
-            identifier = _note_uuid(encounter)
-            element = ET.SubElement(parent, 'Document')
-            _text(element, 'ExternalId', identifier)
-            _text(element, 'EncounterNumber', encounter.id)
-            _text(element, 'DocumentNumber', identifier)
-            _text(element, 'DocumentName', NOTE_DISPLAY)
-            _code_table(element, 'DocumentType', code=NOTE_CODE,
-                        description=NOTE_DISPLAY, standard='LN')
-            _text(element, 'DocumentTime', sda_time(encounter.time))
-            _text(element, 'FileType', 'TXT')
+            element = self._document(parent, encounter, _note_uuid(encounter),
+                                     'TXT')
             _text(element, 'NoteText', text)
             self._care_provider(element, 'Clinician', encounter.clinician)
+
+            if self.pdf_notes:
+                element = self._document(
+                    parent, encounter, _note_pdf_uuid(encounter), 'PDF')
+                pdf = text_to_pdf(text, title=NOTE_DISPLAY)
+                _text(element, 'Stream', base64.b64encode(pdf).decode('ascii'))
+                self._care_provider(element, 'Clinician', encounter.clinician)
+
+    @staticmethod
+    def _document(parent: ET.Element, encounter, identifier: str,
+                  file_type: str) -> ET.Element:
+        element = ET.SubElement(parent, 'Document')
+        _text(element, 'ExternalId', identifier)
+        _text(element, 'EncounterNumber', encounter.id)
+        _text(element, 'DocumentNumber', identifier)
+        _text(element, 'DocumentName', NOTE_DISPLAY)
+        _code_table(element, 'DocumentType', code=NOTE_CODE,
+                    description=NOTE_DISPLAY, standard='LN')
+        _text(element, 'DocumentTime', sda_time(encounter.time))
+        _text(element, 'FileType', file_type)
+        return element
 
     # ------------------------------------------------------------------
     # Medications and vaccinations

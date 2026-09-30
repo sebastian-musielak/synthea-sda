@@ -37,7 +37,6 @@ whatever ``--workers`` is set to.
 Output::
 
     <output>/
-      sda3/
         SYNTHEA_Edge1/
           Ada_Lovelace_1a2b3c4d.xml
           ...
@@ -298,7 +297,7 @@ class FeedWriter:
         }
         self.directories = {}
         for facility in settings.facilities:
-            directory = root / 'sda3' / facility
+            directory = root / facility
             directory.mkdir(parents=True, exist_ok=True)
             self.directories[facility] = directory
 
@@ -393,7 +392,7 @@ def write_manifests(results: List[Dict], settings: FeedSettings) -> Dict[str, Li
         for delivery in result['deliveries']:
             by_facility[delivery['facility']].append(delivery)
 
-    root = Path(settings.output_dir) / 'sda3'
+    root = Path(settings.output_dir) 
     for facility, rows in by_facility.items():
         with open(root / facility / 'manifest.csv', 'w', newline='',
                   encoding='utf-8') as handle:
@@ -413,7 +412,7 @@ def build_report(results: List[Dict], by_facility: Dict[str, List[Dict]],
     feeds = {}
     for facility, rows in by_facility.items():
         feeds[facility] = {
-            'directory': str(Path(settings.output_dir) / 'sda3' / facility),
+            'directory': str(Path(settings.output_dir) / facility),
             'containers': len(rows),
             'home_patients': sum(1 for r in rows if r['home_facility'] == facility),
             'encounters': sum(r['encounters'] for r in rows),
@@ -510,7 +509,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument('--compact', action='store_true',
                         help='write XML without indentation')
     parser.add_argument('--clean', action='store_true',
-                        help='delete <output>/sda3 before writing, so no file '
+                        help='delete <output> before writing, so no file '
                              'from an earlier run is left in a feed')
     args = parser.parse_args(argv)
     if args.population < 1:
@@ -527,8 +526,8 @@ def main(argv=None) -> int:
     print("Synthea Python - InterSystems SDA3 Facility Feeds")
     print("=" * 72)
 
-    if args.clean and (args.output / 'sda3').exists():
-        shutil.rmtree(args.output / 'sda3')
+    if args.clean and args.output.exists():
+        shutil.rmtree(args.output)
     args.output.mkdir(parents=True, exist_ok=True)
 
     options = GeneratorOptions()
@@ -568,7 +567,7 @@ def main(argv=None) -> int:
     print(f"  Facilities:  {', '.join(settings.facilities)}")
     print(f"  Routing:     {settings.routing}")
     print(f"  Workers:     {args.workers}")
-    print(f"  Output:      {args.output / 'sda3'}")
+    print(f"  Output:      {args.output}")
     print()
 
     start = time.time()

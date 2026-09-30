@@ -12,6 +12,26 @@ All notable changes to PySynthea are recorded here. The format follows
 > tracked in issue #74).
 
 ---
+## [1.5.0] - 2026-09-30
+
+The SDA3 export now writes a second Document for each clinical note, with FileType PDF and the base64-encoded PDF in <Stream>. The full test suite passes (556 passed, 1 skipped). I rendered one of the generated PDFs with macOS's own PDF renderer and it came out clean and correctly wrapped.
+
+What each note produces now:
+
+The existing TXT Document, unchanged: FileType TXT with the text in NoteText.
+A new PDF Document with the same EncounterNumber, DocumentType (LOINC 34117-2), DocumentTime and Clinician. It has no NoteText. It gets its own DocumentNumber/ExternalId, so HealthShare treats the two as separate documents rather than one replacing the other.
+How the PDF is built: there's no PDF library in the project's dependencies, so I wrote a small one with no dependencies, pdf.py. It lays out text on US Letter pages in Courier 10pt, wraps long lines at spaces, keeps list indentation on wrapped lines, and starts new pages as needed. Characters the built-in fonts can't draw come out as ? instead of failing the export. The file contains no timestamp or random ID, so the same seed gives byte-identical output, which the existing reproducibility test checks.
+
+Config: the new key exporter.sda3.pdf_notes turns the PDF Documents on or off. It defaults to on, and I added it to synthea.properties and the defaults in config.py.
+
+Changes:
+
+sda3.py: _documents now shares a _document helper for the fields both Documents carry, and a new _note_pdf_uuid gives the PDF its own number.
+Tests: two new tests in test_export_sda3.py (both Documents are present and consistent, the PDF decodes, and turning the key off works), plus a new test_pdf.py covering the file structure, identical output from run to run, wrapping, page breaks and escaping.
+Size: one generated patient came to about 1 MB of XML across 43 notes, with each PDF about 1.5 KB before base64.
+
+I left your uncommitted change to examples/sda3_facility_feeds.py untouched, and I haven't committed anything.
+
 
 ## [1.4.1] - 2026-09-25
 

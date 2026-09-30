@@ -14,7 +14,9 @@ The properties worth holding onto:
 5. The same seed produces the same bytes.
 """
 
+import base64
 import xml.etree.ElementTree as ET
+import zlib
 from datetime import datetime
 
 import pytest
@@ -273,6 +275,40 @@ def test_vaccination(container):
 
     assert vaccination.findtext('OrderItem/SDACodingStandard') == 'CVX'
     assert vaccination.find('Administrations/Administration') is not None
+
+
+NOTE = '2015-06-01\n\n# Chief Complaint\n- Check up (routine)\n'
+
+
+def _documents(person, tmp_path, **overrides):
+    person.record.encounters[0].note_text = NOTE
+    container = SDA3Exporter(_config(**overrides), tmp_path).create_container(person)
+    return {d.findtext('FileType'): d for d in container.iter('Document')}
+
+
+def test_note_is_a_text_document_and_a_pdf_document(person, tmp_path):
+    documents = _documents(person, tmp_path)
+
+    assert set(documents) == {'TXT', 'PDF'}
+    text, pdf = documents['TXT'], documents['PDF']
+    assert text.findtext('NoteText') == NOTE
+    assert pdf.find('NoteText') is None
+    assert text.findtext('DocumentNumber') != pdf.findtext('DocumentNumber')
+    for tag in ('EncounterNumber', 'DocumentTime', 'DocumentType/Code'):
+        assert text.findtext(tag) == pdf.findtext(tag)
+
+    data = base64.b64decode(pdf.findtext('Stream'), validate=True)
+    assert data.startswith(b'%PDF-1.4') and data.endswith(b'%%EOF\n')
+    content = zlib.decompress(
+        data.split(b'stream\n', 1)[1].split(b'\nendstream', 1)[0])
+    assert b'(- Check up \\(routine\\)) \'' in content
+
+
+def test_pdf_notes_can_be_turned_off(person, tmp_path):
+    documents = _documents(person, tmp_path,
+                           **{'exporter.sda3.pdf_notes': False})
+
+    assert set(documents) == {'TXT'}
 
 
 def test_empty_lists_are_left_out(container):
