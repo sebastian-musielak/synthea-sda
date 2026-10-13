@@ -45,14 +45,38 @@ Output::
           ...
       feeds_report.json      run settings, per-feed totals and integrity checks
 
+When ``--output`` is given with a single facility, that directory is taken to
+be the Edge's inbound and the XML (with manifest.csv and feeds_report.json)
+goes straight into it, with no ``SYNTHEA_Edge1/`` subdirectory.
+
+``--debug-large-docs`` (off by default) is for testing how an Edge copes with
+large files. Each container is grown by ``--large-docs-step`` (500KB) more
+than the patient before it, until it reaches ``--large-docs-max`` (50MB):
+patient 0 is its natural size, patient 1 is that plus 500KB, and so on, so
+``-p 103`` covers the whole range. The extra bytes go into the first PDF
+Document's Stream, as filler the PDF itself ignores, so the note still opens.
+Each container's final size is in manifest.csv.
+
 Usage:
     uv run python examples/sda3_facility_feeds.py
     uv run python examples/sda3_facility_feeds.py --facilities 3
     uv run python examples/sda3_facility_feeds.py --facilities 5 --routing encounter -p 200 -w 8
     uv run python examples/sda3_facility_feeds.py --facilities SYNTHEA_Edge2,SYNTHEA_Edge4
+    uv run python examples/sda3_facility_feeds.py -o /path/to/edge/inbound
+    uv run python examples/sda3_facility_feeds.py --debug-large-docs -p 103
+    uv run python examples/sda3_facility_feeds.py --debug-large-docs --large-docs-step 5MB -p 3
+
+    uv run python /Users/musielak/OneDrive\ -\ InterSystems\ Corporation/code/python/tietai-synthea/examples/sda3_facility_feeds.py --facilities SYNTHEA_Edge1 --routing encounter -p 100 -w 5 -o /Users/musielak/intersystems/docker/ucr/hsedge1/deploy/data-ingestion/Data/HSEDGE1/SDAIn/ --seed 12345
+    uv run python /Users/musielak/OneDrive\ -\ InterSystems\ Corporation/code/python/tietai-synthea/examples/sda3_facility_feeds.py --facilities SYNTHEA_Edge2 --routing encounter -p 100 -w 5 -o /Users/musielak/intersystems/docker/ucr/hsedge2/deploy/data-ingestion/Data/HSEDGE2/SDAIn/ --seed 23456
+    uv run python /Users/musielak/OneDrive\ -\ InterSystems\ Corporation/code/python/tietai-synthea/examples/sda3_facility_feeds.py --facilities SYNTHEA_Edge3 --routing encounter -p 100 -w 5 -o /Users/musielak/intersystems/docker/ucr/hsedge3/deploy/data-ingestion/Data/HSEDGE3/SDAIn/ --seed 34567
+    uv run python /Users/musielak/OneDrive\ -\ InterSystems\ Corporation/code/python/tietai-synthea/examples/sda3_facility_feeds.py --facilities SYNTHEA_Edge4 --routing encounter -p 100 -w 5 -o /Users/musielak/intersystems/docker/ucr/hsedge4/deploy/data-ingestion/Data/HSEDGE4/SDAIn/ --seed 45678
+    uv run python /Users/musielak/OneDrive\ -\ InterSystems\ Corporation/code/python/tietai-synthea/examples/sda3_facility_feeds.py --facilities SYNTHEA_Edge5 --routing encounter -p 100 -w 5 -o /Users/musielak/intersystems/docker/ucr/hsedge5/deploy/data-ingestion/Data/HSEDGE5/SDAIn/ --seed 56789
+
+
 """
 
 import argparse
+import base64
 import concurrent.futures
 import copy
 import csv
@@ -70,6 +94,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from synthea import Generator, GeneratorOptions
+from synthea.export.pdf import pad_pdf
 from synthea.export.sda3 import SDA3Exporter
 from synthea.helpers.config import Config
 
@@ -80,6 +105,8 @@ ALL_FACILITIES = tuple(f'{FACILITY_PREFIX}{n}' for n in range(1, MAX_FACILITIES 
 DEFAULT_FACILITY = ALL_FACILITIES[0]
 
 ROUTINGS = ('patient', 'encounter')
+
+DEFAULT_OUTPUT = Path('./output/example_sda3_feeds')
 
 #: HealthRecord lists whose entries may point at an encounter. An entry is sent
 #: by the Edge that owns its encounter, so its EncounterNumber always resolves
@@ -93,8 +120,11 @@ RECORD_LISTS = (
 MANIFEST_FIELDS = [
     'sequence', 'file', 'patient_id', 'mrn', 'family_name', 'given_name',
     'birth_time', 'alive', 'home_facility', 'encounters', 'streamlets',
-    'dangling_encounter_refs',
+    'dangling_encounter_refs', 'file_bytes', 'padding_bytes',
 ]
+
+_SIZE_UNITS = {'': 1, 'B': 1, 'K': 1024, 'KB': 1024, 'M': 1024 ** 2,
+               'MB': 1024 ** 2, 'G': 1024 ** 3, 'GB': 1024 ** 3}
 
 
 @dataclass
@@ -104,6 +134,17 @@ class FeedSettings:
     routing: str
     output_dir: str
     only_living: bool
+    #: Write the single feed straight into `output_dir`, with no
+    #: per-facility subdirectory.
+    flat: bool = False
+    #: --debug-large-docs: bytes each patient's containers grow by over the
+    #: previous patient's, and the size they stop at. 0 leaves them alone.
+    large_docs_step: int = 0
+    large_docs_max: int = 0
+
+    def feed_directory(self, facility: str) -> Path:
+        root = Path(self.output_dir)
+        return root if self.flat else root / facility
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +310,35 @@ def container_filename(person) -> str:
     return f"{first}_{last}_{person.id[:8]}.xml"
 
 
-def write_container(exporter: SDA3Exporter, container: ET.Element, path: Path) -> None:
+def render_container(exporter: SDA3Exporter, container: ET.Element) -> bytes:
     if exporter.pretty:
         ET.indent(container, space='  ')
-    ET.ElementTree(container).write(path, encoding='utf-8', xml_declaration=True)
+    return ET.tostring(container, encoding='utf-8', xml_declaration=True)
+
+
+def pad_container(container: ET.Element, data: bytes, size: int,
+                  seed: object) -> Tuple[bytes, int]:
+    """Grow rendered container `data` to about `size` bytes (--debug-large-docs).
+
+    The first PDF Document's file is padded and its Stream re-encoded. A
+    Stream is base64, which XML never escapes, so the file grows by exactly
+    as many characters as the Stream does. Returns the new bytes and how
+    many were added; a container with no PDF Document is left as it is.
+    """
+    extra = size - len(data)
+    if extra <= 0:
+        return data, 0
+    for document in container.iter('Document'):
+        stream = document.find('Stream')
+        if document.findtext('FileType') != 'PDF' or stream is None:
+            continue
+        pdf = base64.b64decode(stream.text)
+        # Four base64 characters carry three bytes.
+        padded = pad_pdf(pdf, (len(stream.text) + extra) // 4 * 3, seed)
+        stream.text = base64.b64encode(padded).decode('ascii')
+        result = ET.tostring(container, encoding='utf-8', xml_declaration=True)
+        return result, len(result) - len(data)
+    return data, 0
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +363,7 @@ class FeedWriter:
         }
         self.directories = {}
         for facility in settings.facilities:
-            directory = root / facility
+            directory = settings.feed_directory(facility)
             directory.mkdir(parents=True, exist_ok=True)
             self.directories[facility] = directory
 
@@ -315,7 +381,14 @@ class FeedWriter:
             container = exporter.create_container(view)
             checks = check_container(container, facility)
             path = self.directories[facility] / container_filename(view)
-            write_container(exporter, container, path)
+            data = render_container(exporter, container)
+            padding = 0
+            if self.settings.large_docs_step:
+                size = min(len(data) + index * self.settings.large_docs_step,
+                           self.settings.large_docs_max)
+                data, padding = pad_container(container, data, size,
+                                              f'{person.id}:{facility}')
+            path.write_bytes(data)
 
             patient = container.find('Patient')
             deliveries.append({
@@ -329,6 +402,8 @@ class FeedWriter:
                 'birth_time': patient.findtext('BirthTime'),
                 'alive': person.alive,
                 'home_facility': home,
+                'file_bytes': len(data),
+                'padding_bytes': padding,
                 **checks,
             })
 
@@ -392,9 +467,8 @@ def write_manifests(results: List[Dict], settings: FeedSettings) -> Dict[str, Li
         for delivery in result['deliveries']:
             by_facility[delivery['facility']].append(delivery)
 
-    root = Path(settings.output_dir) 
     for facility, rows in by_facility.items():
-        with open(root / facility / 'manifest.csv', 'w', newline='',
+        with open(settings.feed_directory(facility) / 'manifest.csv', 'w', newline='',
                   encoding='utf-8') as handle:
             writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS,
                                     extrasaction='ignore')
@@ -412,12 +486,13 @@ def build_report(results: List[Dict], by_facility: Dict[str, List[Dict]],
     feeds = {}
     for facility, rows in by_facility.items():
         feeds[facility] = {
-            'directory': str(Path(settings.output_dir) / facility),
+            'directory': str(settings.feed_directory(facility)),
             'containers': len(rows),
             'home_patients': sum(1 for r in rows if r['home_facility'] == facility),
             'encounters': sum(r['encounters'] for r in rows),
             'streamlets': sum(r['streamlets'] for r in rows),
             'dangling_encounter_refs': sum(r['dangling_encounter_refs'] for r in rows),
+            'largest_file_bytes': max((r['file_bytes'] for r in rows), default=0),
         }
 
     return {
@@ -471,12 +546,34 @@ def print_report(report: Dict) -> None:
               f"{feed['dangling_encounter_refs']:>10}")
     print()
     for facility, feed in report['feeds'].items():
-        print(f"  {facility}: {feed['directory']}")
+        print(f"  {facility}: {feed['directory']}  "
+              f"(largest file {format_size(feed['largest_file_bytes'])})")
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def parse_size(value: str) -> int:
+    """A byte count such as ``500KB``, ``50MB`` or ``1048576``."""
+    text = value.strip().upper()
+    number = text.rstrip('KMGB')
+    unit = text[len(number):]
+    try:
+        size = int(float(number) * _SIZE_UNITS[unit])
+    except (ValueError, KeyError):
+        raise argparse.ArgumentTypeError(f"not a size: {value!r}") from None
+    if size <= 0:
+        raise argparse.ArgumentTypeError(f"size must be positive: {value!r}")
+    return size
+
+
+def format_size(size: int) -> str:
+    for unit, scale in (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024)):
+        if size >= scale:
+            return f"{size / scale:.1f}{unit}"
+    return f"{size}B"
+
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -502,8 +599,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument('-w', '--workers', type=int,
                         default=min(4, os.cpu_count() or 1),
                         help='worker processes (1 runs in-process)')
-    parser.add_argument('-o', '--output', type=Path,
-                        default=Path('./output/example_sda3_feeds'))
+    parser.add_argument('-o', '--output', type=Path, default=None,
+                        help=f'with one facility, write its XML straight into '
+                             f'this directory; with several, one subdirectory '
+                             f'per facility. Default: {DEFAULT_OUTPUT}/<facility>/')
     parser.add_argument('--only-living', action='store_true',
                         help='leave deceased patients out of every feed')
     parser.add_argument('--compact', action='store_true',
@@ -511,11 +610,25 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument('--clean', action='store_true',
                         help='delete <output> before writing, so no file '
                              'from an earlier run is left in a feed')
+    parser.add_argument('--debug-large-docs', action='store_true',
+                        help='grow each patient\'s containers by --large-docs-step '
+                             'over the previous patient\'s, up to --large-docs-max, '
+                             'to test ingestion of large files')
+    parser.add_argument('--large-docs-step', type=parse_size, default='500KB',
+                        help='growth per patient with --debug-large-docs '
+                             '(K/M/G are powers of 1024)')
+    parser.add_argument('--large-docs-max', type=parse_size, default='50MB',
+                        help='largest container --debug-large-docs makes')
     args = parser.parse_args(argv)
     if args.population < 1:
         parser.error('--population must be at least 1')
     # A worker per patient at most; each one loads every module on start-up.
     args.workers = max(1, min(args.workers, args.population))
+    # An explicit --output for one feed is taken to be that Edge's inbound
+    # directory. Several feeds still need a directory each.
+    args.flat = args.output is not None and len(args.facilities) == 1
+    if args.output is None:
+        args.output = DEFAULT_OUTPUT
     return args
 
 
@@ -554,12 +667,18 @@ def main(argv=None) -> int:
     config.set('exporter.text.export', False)
     config.set('exporter.fhir.server_url', '')
     config.set('exporter.pretty_print', not args.compact)
+    if args.debug_large_docs:
+        # The padding rides in a PDF Document's Stream.
+        config.set('exporter.sda3.pdf_notes', True)
 
     settings = FeedSettings(
         facilities=args.facilities,
         routing=args.routing,
         output_dir=str(args.output),
         only_living=args.only_living,
+        flat=args.flat,
+        large_docs_step=args.large_docs_step if args.debug_large_docs else 0,
+        large_docs_max=args.large_docs_max if args.debug_large_docs else 0,
     )
 
     print(f"  Population:  {args.population} ({args.state}"
@@ -568,6 +687,9 @@ def main(argv=None) -> int:
     print(f"  Routing:     {settings.routing}")
     print(f"  Workers:     {args.workers}")
     print(f"  Output:      {args.output}")
+    if args.debug_large_docs:
+        print(f"  Large docs:  +{format_size(args.large_docs_step)} per patient, "
+              f"up to {format_size(args.large_docs_max)}")
     print()
 
     start = time.time()
@@ -577,6 +699,11 @@ def main(argv=None) -> int:
         print("\nGeneration interrupted by user.")
         return 1
     elapsed = time.time() - start
+
+    # SDA3Exporter makes <base>/sda3/ on construction; this script never uses it.
+    unused = args.output / 'sda3'
+    if unused.is_dir() and not any(unused.iterdir()):
+        unused.rmdir()
 
     by_facility = write_manifests(results, settings)
     report = build_report(results, by_facility, settings, options,

@@ -294,8 +294,14 @@ def test_note_is_a_text_document_and_a_pdf_document(person, tmp_path):
     assert text.findtext('NoteText') == NOTE
     assert pdf.find('NoteText') is None
     assert text.findtext('DocumentNumber') != pdf.findtext('DocumentNumber')
-    for tag in ('EncounterNumber', 'DocumentTime', 'DocumentType/Code'):
+    for tag in ('EncounterNumber', 'DocumentTime', 'DocumentType/Code',
+                'EnteredBy/Code', 'EnteredAt/Code'):
         assert text.findtext(tag) == pdf.findtext(tag)
+    encounter = person.record.encounters[0]
+    if encounter.provider is not None:
+        assert pdf.findtext('EnteredAt/Code') == encounter.provider.id
+    if encounter.clinician is not None:
+        assert pdf.findtext('EnteredBy/Description')
 
     data = base64.b64decode(pdf.findtext('Stream'), validate=True)
     assert data.startswith(b'%PDF-1.4') and data.endswith(b'%%EOF\n')

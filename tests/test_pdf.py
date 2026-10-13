@@ -57,3 +57,29 @@ def test_special_and_unencodable_characters_do_not_break_the_file():
 
 def test_empty_text_is_still_one_page():
     assert b'/Count 1' in pdf.text_to_pdf('')
+
+
+def test_padding_grows_the_file_to_size_and_keeps_it_a_pdf():
+    original = pdf.text_to_pdf('Hello', title='Note')
+    data = pdf.pad_pdf(original, 100_000, seed='x')
+
+    assert len(data) == 100_000
+    assert data.startswith(original) and data.endswith(b'%%EOF\n')
+    assert data == pdf.pad_pdf(original, 100_000, seed='x')
+
+    # The update's xref names the filler object, and its trailer keeps the
+    # original's Root and Info and points back at the original xref.
+    startxref = int(data.rsplit(b'startxref\n', 1)[1].split(b'\n', 1)[0])
+    section = data[startxref:]
+    assert section.startswith(b'xref\n')
+    first, offset = section.split(b'\n')[1:3]
+    assert data[int(offset.split()[0]):].startswith(first.split()[0] + b' 0 obj')
+    trailer = section.split(b'trailer\n', 1)[1]
+    previous = int(original.rsplit(b'startxref\n', 1)[1].split(b'\n', 1)[0])
+    assert b'/Root 1 0 R' in trailer and b'/Info ' in trailer
+    assert b'/Prev %d' % previous in trailer
+
+
+def test_padding_too_small_to_fit_leaves_the_file_alone():
+    original = pdf.text_to_pdf('Hello')
+    assert pdf.pad_pdf(original, len(original) + 10) == original

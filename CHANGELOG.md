@@ -12,6 +12,20 @@ All notable changes to PySynthea are recorded here. The format follows
 > tracked in issue #74).
 
 ---
+## [Unreleased]
+
+### Added
+- SDA3 Documents carry `EnteredBy` (the encounter's clinician) and `EnteredAt`
+  (its facility).
+- `synthea.export.pdf.pad_pdf` grows a PDF to a given size with filler the PDF
+  ignores, added as an incremental update so the file still opens.
+- `examples/sda3_facility_feeds.py --debug-large-docs` (off by default) for
+  testing ingestion of large SDA3 files: each patient's containers are
+  `--large-docs-step` (500KB) larger than the previous patient's, up to
+  `--large-docs-max` (50MB). manifest.csv gains `file_bytes` and
+  `padding_bytes`.
+
+---
 ## [1.5.0] - 2026-09-30
 
 The SDA3 export now writes a second Document for each clinical note, with FileType PDF and the base64-encoded PDF in <Stream>. The full test suite passes (556 passed, 1 skipped). I rendered one of the generated PDFs with macOS's own PDF renderer and it came out clean and correctly wrapped.

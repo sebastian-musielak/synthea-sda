@@ -133,3 +133,51 @@ def text_to_pdf(text: str, title: Optional[str] = None) -> bytes:
         trailer += b' /Info %d 0 R' % info
     out += b'trailer\n' + trailer + b' >>\nstartxref\n%d\n%%%%EOF\n' % xref
     return bytes(out)
+
+
+def pad_pdf(data: bytes, size: int, seed: object = 0) -> bytes:
+    """Grow a PDF from `text_to_pdf` to `size` bytes, still a valid PDF.
+
+    For testing how a consumer copes with large documents. The filler is an
+    object nothing refers to, added as an incremental update (a new xref
+    section whose trailer points back at the original), so the original
+    bytes are untouched and a viewer shows the same pages. The filler is
+    random, so it does not shrink when compressed, but seeded by `seed`, so
+    the output is reproducible. Returns `data` unchanged when it is already
+    `size` bytes or more, or too close to it to fit the update.
+    """
+    import random
+
+    previous = int(data.rsplit(b'startxref\n', 1)[1].split(b'\n', 1)[0])
+    trailer = data.rsplit(b'trailer\n', 1)[1].split(b'>>', 1)[0]
+    number = int(trailer.split(b'/Size ', 1)[1].split()[0])
+    keep = b''.join(b' /%s %s 0 R' % (key, ref) for key, ref in
+                    ((b'Root', _ref(trailer, b'Root')),
+                     (b'Info', _ref(trailer, b'Info'))) if ref)
+
+    def frame(length: int):
+        head = b'%d 0 obj\n<< /Length %d >>\nstream\n' % (number, length)
+        xref = len(data) + len(head) + length + len(b'\nendstream\nendobj\n')
+        foot = (b'\nendstream\nendobj\n'
+                b'xref\n%d 1\n%010d 00000 n \n' % (number, len(data))
+                + b'trailer\n<< /Size %d%s /Prev %d >>\n' % (number + 1, keep, previous)
+                + b'startxref\n%d\n%%%%EOF\n' % xref)
+        return head, foot
+
+    # The frame's numbers grow with the filler's length, so settle the two.
+    length = 0
+    for _ in range(3):
+        head, foot = frame(length)
+        length = size - len(data) - len(head) - len(foot)
+        if length <= 0:
+            return data
+    head, foot = frame(length)
+    filler = random.Random(seed).randbytes(length)
+    return data + head + filler + foot
+
+
+def _ref(trailer: bytes, key: bytes) -> Optional[bytes]:
+    marker = b'/' + key + b' '
+    if marker not in trailer:
+        return None
+    return trailer.split(marker, 1)[1].split()[0]

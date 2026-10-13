@@ -871,14 +871,32 @@ class SDA3Exporter(PatientExporter):
     @staticmethod
     def _document(parent: ET.Element, encounter, identifier: str,
                   file_type: str) -> ET.Element:
+        """The fields a TXT and a PDF Document share, in the order SDA3 lists them.
+
+        EnteredBy is the encounter's clinician and EnteredAt its facility, as
+        plain code tables: SDA3 types them as User and Organization, not as
+        the fuller CareProvider and HealthCareFacility.
+        """
         element = ET.SubElement(parent, 'Document')
         _text(element, 'ExternalId', identifier)
         _text(element, 'EncounterNumber', encounter.id)
-        _text(element, 'DocumentNumber', identifier)
-        _text(element, 'DocumentName', NOTE_DISPLAY)
         _code_table(element, 'DocumentType', code=NOTE_CODE,
                     description=NOTE_DISPLAY, standard='LN')
         _text(element, 'DocumentTime', sda_time(encounter.time))
+        clinician = getattr(encounter, 'clinician', None)
+        if clinician is not None:
+            name = ', '.join(part for part in (
+                getattr(clinician, 'last_name', None),
+                getattr(clinician, 'first_name', None)) if part) or None
+            _code_table(element, 'EnteredBy',
+                        code=getattr(clinician, 'npi', None) or clinician.id,
+                        description=name)
+        _text(element, 'DocumentNumber', identifier)
+        _text(element, 'DocumentName', NOTE_DISPLAY)
+        provider = getattr(encounter, 'provider', None)
+        if provider is not None:
+            _code_table(element, 'EnteredAt', code=provider.id,
+                        description=provider.name)
         _text(element, 'FileType', file_type)
         return element
 
